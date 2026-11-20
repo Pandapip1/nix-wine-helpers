@@ -1,0 +1,48 @@
+From 55755093defd7962b43948b333618f2b9cb9611a Mon Sep 17 00:00:00 2001
+From: Gavin John <gjohn@rtr.ai>
+Date: Thu, 15 Oct 2026 12:11:19 -0400
+Subject: [PATCH] wineboot: Avoid dividing by zero when calibrating the TSC
+ frequency.
+
+read_tsc_frequency() divides by the difference between two
+RtlGetSystemTimePrecise() samples taken around a Sleep(1), and then by the
+smaller of the two computed frequencies. If the system time does not advance
+across the sleep (a coarse clock, a stepped clock, or a clock that is frozen
+for reproducible builds), the former is zero and wineboot crashes with an
+unhandled division by zero.
+
+Treat such a sample as a failed calibration attempt instead, so that the
+existing retry and 'calibration failed' paths are used.
+
+Assisted-by: Claude Sonnet 5.5
+---
+ programs/wineboot/wineboot.c | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/programs/wineboot/wineboot.c b/programs/wineboot/wineboot.c
+index b49ad3c00..1bd01e066 100644
+--- a/programs/wineboot/wineboot.c
++++ b/programs/wineboot/wineboot.c
+@@ -281,8 +281,19 @@ static UINT64 read_tsc_frequency(void)
+             tsc3 = __rdtsc(); __cpuid( regs, 0 );
+         }
+ 
++        if (time1 <= time0)  /* the system time did not advance (coarse or frozen clock) */
++        {
++            error = 1000000;
++            continue;
++        }
++
+         freq0 = (tsc2 - tsc0) * 10000000 / (time1 - time0);
+         freq1 = (tsc3 - tsc1) * 10000000 / (time1 - time0);
++        if (freq0 <= 0 || freq1 <= 0)
++        {
++            error = 1000000;
++            continue;
++        }
+         error = llabs( (freq1 - freq0) * 1000000 / min( freq1, freq0 ) );
+     }
+     while (error > 500 && --retries);
+-- 
+2.43.0
+
